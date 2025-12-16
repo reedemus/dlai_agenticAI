@@ -2,6 +2,7 @@
 import os
 import re
 import json
+import requests
 import base64
 import mimetypes
 from pathlib import Path
@@ -10,20 +11,21 @@ from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
 from PIL import Image  # (kept if you need it elsewhere)
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 from openai import OpenAI
 from anthropic import Anthropic
 from html import escape
 
 # === Env & Clients ===
-load_dotenv()
+api_keys_path = os.path.join(os.curdir, "..", ".env") 
+load_dotenv(find_dotenv(api_keys_path))
 openai_api_key = os.getenv("OPENAI_API_KEY")
 anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
 
 # Both clients read keys from env by default; explicit is also fine:
 openai_client = OpenAI(api_key=openai_api_key) if openai_api_key else OpenAI()
 anthropic_client = Anthropic(api_key=anthropic_api_key) if anthropic_api_key else Anthropic()
-
 
 def get_response(model: str, prompt: str) -> str:
     if "claude" in model.lower() or "anthropic" in model.lower():
@@ -34,7 +36,22 @@ def get_response(model: str, prompt: str) -> str:
             messages=[{"role": "user", "content": [{"type": "text", "text": prompt}]}],
         )
         return message.content[0].text
-
+    elif "nvidia" in model.lower():
+        url = "https://openrouter.ai/api/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {openrouter_api_key}",
+        }
+        messages=[
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ]
+        payload = {"model": model, "messages": messages}
+        response = requests.post(url, headers=headers, json=payload)
+        content = response.json()
+        reply = content["choices"][0]["message"]["content"]
+        return reply
     else:
         # Default to OpenAI format for all other models (gpt-4, o3-mini, o1, etc.)
         response = openai_client.responses.create(
@@ -213,3 +230,26 @@ def image_openai_call(model_name: str, prompt: str, media_type: str, b64: str) -
     )
     content = (resp.output_text or "").strip()
     return content
+
+
+def image_openrouter_call(model_name: str, prompt: str, media_type: str, b64: str) -> str:
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {openrouter_api_key}",
+        "Content-Type": "application/json"
+    }
+    data_url = f"data:{media_type};base64,{b64}"
+    messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            }
+        ]
+    payload = {"model": model_name, "messages": messages}
+    response = requests.post(url, headers=headers, json=payload)
+    content = response.json()
+    reply = content["choices"][0]["message"]["content"]
+    return reply
